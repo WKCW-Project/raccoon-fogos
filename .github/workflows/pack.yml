@@ -1,0 +1,85 @@
+name: Package AnyKernel3
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Source run id with fogos-finasu-kernel artifact'
+        required: false
+        default: ''
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download kernel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fogos-finasu-kernel
+          path: artifact
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show artifact
+        run: |
+          set -e
+          find artifact -type f -printf '%p %s\n'
+
+      - name: Package AnyKernel3 zip
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git ak3
+          cd ak3
+          rm -rf .git .github patch README.md
+          mkdir -p patch
+          IMG=$(find ../artifact -name 'Image' -type f | head -1)
+          test -n "$IMG"
+          cp "$IMG" ./Image
+          DTBO=$(find ../artifact -name 'dtbo.img' -type f | head -1)
+          if [ -n "$DTBO" ]; then cp "$DTBO" ./dtbo.img; fi
+          ls -lh Image dtbo.img 2>/dev/null || ls -lh Image
+          sed -i 's/^kernel.string=.*/kernel.string=fogos-FinaSU SUSFS/' anykernel.sh
+          sed -i 's/^device.name1=.*/device.name1=fogos/' anykernel.sh
+          sed -i 's/^device.name2=.*/device.name2=fogor/' anykernel.sh
+          sed -i 's/^device.name3=.*/device.name3=fogo/' anykernel.sh
+          sed -i 's/^device.name4=.*/device.name4=/' anykernel.sh
+          sed -i 's/^device.name5=.*/device.name5=/' anykernel.sh
+          # kernel Image lives in vendor_boot on SM6375 (boot header v3)
+          sed -i 's#^BLOCK=.*#BLOCK=/dev/block/bootdevice/by-name/vendor_boot;#' anykernel.sh
+          sed -i 's/^IS_SLOT_DEVICE=.*/IS_SLOT_DEVICE=1;/' anykernel.sh
+          sed -i '/^backup_file /d;/^replace_string /d;/^insert_line /d;/^append_file /d;/^patch_fstab /d' anykernel.sh
+          grep -nE '^(kernel.string|device.name1|BLOCK|IS_SLOT_DEVICE)' anykernel.sh
+          bash -n anykernel.sh
+          echo 'bash syntax OK'
+          chmod +x anykernel.sh
+          NAME="fogos-FinaSU-$(date +%Y%m%d)-run${GITHUB_RUN_NUMBER}"
+          zip -r9 "../${NAME}.zip" . -x "*.git*" > /dev/null
+          cd ..
+          ls -lh *.zip
+          echo "AK3_NAME=${NAME}" >> $GITHUB_ENV
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ak3-${{ github.run_number }}
+          name: fogos FinaSU AnyKernel3
+          body: |
+            fogos (Moto G34/G45 5G) kernel - FinaSU + SUSFS 5.4
+
+            NOT VERIFIED ON DEVICE. Flash at your own risk.
+
+            - Source: LineageOS android_kernel_motorola_sm6375 (5.4.302)
+            - Defconfig: holi-qgki + lineage_moto-holi + moto-holi-fogos
+            - Compiled with ZyCromerZ Clang 14.0.6, LLVM=1
+            - FinaSU trusted slot2 = v1.2.1 signature (size 716)
+            - SUSFS 5.4 (simonpunk/susfs4ksu) integrated
+
+            Install: flash in TWRP or a kernel flasher app.
+            Manager: must use FinaSU v1.2.1.
+            Rollback: keep a stock boot/vendor_boot backup.
+          files: ${{ github.workspace }}/${{ env.AK3_NAME }}.zip
+          prerelease: true
+          draft: false
